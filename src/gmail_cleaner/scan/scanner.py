@@ -174,8 +174,9 @@ def run_scan(
                     progress(
                         f"WARNING: {query_failed} metadata fetches failed for {pq.name}"
                     )
-                    for err in batch.errors[:5]:
-                        progress(f"  {err}")
+                    for err in batch.errors[:3]:
+                        short = err if len(err) < 160 else err[:157] + "..."
+                        progress(f"  {short}")
 
             matched = [all_metas[mid] for mid in ids if mid in all_metas]
             est = sum(m.size_estimate for m in matched)
