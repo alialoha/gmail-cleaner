@@ -1,0 +1,27 @@
+# Optional cleanup suggestions. Copy to ~/.gmail-cleaner/policy.yaml
+# Policies never auto-delete; they only shape scan suggestions.
+
+version: 1
+
+queries:
+  - name: large_attachments
+    q: "has:attachment larger:5M"
+    enabled: true
+  - name: huge_messages
+    q: "larger:10M"
+    enabled: true
+  - name: old_promotions
+    q: "category:promotions older_than:1y"
+    enabled: true
+  - name: old_social
+    q: "category:social older_than:6m"
+    enabled: true
+  - name: spam
+    q: "in:spam"
+    enabled: true
+  - name: trash
+    q: "in:trash"
+    enabled: true
+
+# When presenting sender rankings, ignore these (optional)
+ignore_senders: []

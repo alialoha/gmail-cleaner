@@ -1,0 +1,18 @@
+# Copy to ~/.gmail-cleaner/accounts.yaml and edit.
+# Never commit a real accounts.yaml.
+
+accounts:
+  - id: personal
+    email: you@gmail.com
+    # Path to the OAuth Desktop client JSON from Google Cloud Console
+    credentials_file: ~/.gmail-cleaner/credentials/client_secret.json
+    # Created automatically after first login
+    token_file: ~/.gmail-cleaner/tokens/personal.json
+    # modify = trash; full = permanent delete also allowed
+    scope: modify
+
+  # - id: work
+  #   email: you@company.com
+  #   credentials_file: ~/.gmail-cleaner/credentials/client_secret.json
+  #   token_file: ~/.gmail-cleaner/tokens/work.json
+  #   scope: modify
