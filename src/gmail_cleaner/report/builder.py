@@ -32,8 +32,11 @@ def save_report(result: ScanResult, path: Path | None = None) -> Path:
 
 def render_scan_table(result: ScanResult, console: Console | None = None, top_n: int = 20) -> None:
     console = console or Console()
+    from gmail_cleaner.policy.models import LOCATION_LABELS
+
     console.print(
         f"[bold]Scan {result.run_id}[/bold] · {result.email} · "
+        f"mode={result.mode} · {LOCATION_LABELS.get(result.location, result.location)} · "
         f"{result.total_messages} msgs · ~{format_bytes(result.total_est_bytes)}"
     )
     if result.failed_metadata:
@@ -58,7 +61,8 @@ def render_scan_table(result: ScanResult, console: Console | None = None, top_n:
         )
     console.print(qtable)
 
-    stable = Table(title=f"Top {top_n} senders by estimated size")
+    rank = "message count" if result.mode == "subscriptions" else "estimated size"
+    stable = Table(title=f"Top {top_n} senders by {rank}")
     stable.add_column("Sender")
     stable.add_column("Messages", justify="right")
     stable.add_column("Est. size", justify="right")

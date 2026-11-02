@@ -9,6 +9,9 @@ function parseSummary(raw: string | null) {
       total_messages?: number
       total_est_bytes?: number
       failed_metadata?: number
+      mode?: string
+      location?: string
+      location_label?: string
       top_senders?: { sender: string; message_count: number; est_bytes: number }[]
       queries?: { name: string; message_count: number; est_bytes: number }[]
       error?: string
@@ -47,6 +50,21 @@ export default function RunDetailPage() {
 
   const summary = useMemo(() => parseSummary(run?.summary_json ?? null), [run])
 
+  const scanMeta = useMemo(() => {
+    if (summary?.mode || summary?.location) {
+      return {
+        mode: summary.mode || 'storage',
+        location: summary.location || 'all',
+        label: summary.location_label || summary.location || 'all',
+      }
+    }
+    const parts = (run?.mode || '').split(':')
+    if (parts.length >= 3 && parts[0] === 'scan') {
+      return { mode: parts[1], location: parts[2], label: parts[2] }
+    }
+    return { mode: 'storage', location: 'all', label: 'all' }
+  }, [run, summary])
+
   const senderFindings: Finding[] = useMemo(
     () =>
       (run?.findings || [])
@@ -66,7 +84,10 @@ export default function RunDetailPage() {
     setError('')
     setSelectedSender(sender)
     try {
-      const res = await api.preview(run.account_id, { sender })
+      const res = await api.preview(run.account_id, {
+        sender,
+        location: scanMeta.location,
+      })
       setPreviewCount(res.message_count)
       setPreviewIds(res.all_message_ids)
     } catch (err) {
@@ -136,7 +157,7 @@ export default function RunDetailPage() {
               Run <span className="mono">{runId}</span>
             </h2>
             <p className="sub">
-              {run?.account_id} · {run?.mode} ·{' '}
+              {run?.account_id} · {scanMeta.mode} · {scanMeta.label} ·{' '}
               <span
                 className={`badge ${
                   run?.status === 'completed'
@@ -197,7 +218,10 @@ export default function RunDetailPage() {
 
       <section className="panel">
         <h2>Top senders</h2>
-        <p className="sub">Preview a sender, then confirm to move matching mail to Trash.</p>
+        <p className="sub">
+          Ranked by {scanMeta.mode === 'subscriptions' ? 'message count' : 'size'}.
+          Preview stays scoped to this scan location when possible, then confirm Trash.
+        </p>
         <table>
           <thead>
             <tr>

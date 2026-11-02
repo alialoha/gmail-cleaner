@@ -157,6 +157,16 @@ def accounts_auth(
 def scan_cmd(
     account: str | None = typer.Option(None, "--account", "-a", help="Account id"),
     all_accounts: bool = typer.Option(False, "--all", help="Scan every account"),
+    mode: str = typer.Option(
+        "storage",
+        "--mode",
+        help="storage = quota hogs; subscriptions = newsletters/ads/marketing tabs",
+    ),
+    location: str = typer.Option(
+        "all",
+        "--location",
+        help="all | inbox | primary | promotions | social | updates | forums",
+    ),
     max_per_query: int | None = typer.Option(
         None,
         "--max-per-query",
@@ -164,7 +174,14 @@ def scan_cmd(
     ),
     top: int = typer.Option(20, "--top", help="Top senders to show"),
 ) -> None:
-    """Dry-run storage scan. Never deletes."""
+    """Dry-run scan. Never deletes."""
+    from gmail_cleaner.policy.models import LOCATIONS, MODES
+
+    if mode not in MODES:
+        raise typer.BadParameter(f"mode must be one of: {', '.join(MODES)}")
+    if location not in LOCATIONS:
+        raise typer.BadParameter(f"location must be one of: {', '.join(LOCATIONS)}")
+
     reg = _registry()
     targets: list[Account]
     if all_accounts:
@@ -179,9 +196,11 @@ def scan_cmd(
 
     history = HistoryStore()
     for target in targets:
-        console.rule(f"Scanning {target.id}")
+        console.rule(f"Scanning {target.id} ({mode}/{location})")
         result = run_scan(
             target,
+            mode=mode,  # type: ignore[arg-type]
+            location=location,  # type: ignore[arg-type]
             history=history,
             max_messages_per_query=max_per_query,
             on_progress=lambda msg: console.log(msg),

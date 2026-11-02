@@ -77,7 +77,14 @@ Account ids may only contain letters, digits, `_`, and `-` (path-safe).
 ### 4. Scan (never deletes)
 
 ```bash
-gmail-cleaner scan --account personal
+# Storage / quota X-ray (entire mailbox)
+gmail-cleaner scan --account personal --mode storage --location all
+
+# Newsletters / ads / marketing tabs
+gmail-cleaner scan --account personal --mode subscriptions --location promotions
+gmail-cleaner scan --account personal --mode subscriptions --location inbox
+
+# Locations: all | inbox | primary | promotions | social | updates | forums
 gmail-cleaner scan --all
 gmail-cleaner history
 gmail-cleaner history --run <run_id>

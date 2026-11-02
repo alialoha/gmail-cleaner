@@ -32,6 +32,11 @@ export type RunDetail = RunSummary & {
   events: { id: number; level: string; message: string; created_at: string }[]
 }
 
+export type ScanOptions = {
+  modes: { id: string; label: string }[]
+  locations: { id: string; label: string }[]
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
@@ -70,16 +75,25 @@ export const api = {
     request<{ account_id: string; count: number }>(
       `/api/accounts/${accountId}/trash-count`,
     ),
-  startScan: (accountId: string, maxPerQuery?: number) =>
+  scanOptions: () => request<ScanOptions>('/api/scan-options'),
+  startScan: (
+    accountId: string,
+    opts?: { mode?: string; location?: string; maxPerQuery?: number },
+  ) =>
     request<{ run_id: string; status: string; account_id: string }>('/api/scan', {
       method: 'POST',
       body: JSON.stringify({
         account_id: accountId,
-        max_per_query: maxPerQuery ?? null,
+        mode: opts?.mode ?? 'storage',
+        location: opts?.location ?? 'all',
+        max_per_query: opts?.maxPerQuery ?? null,
         background: true,
       }),
     }),
-  preview: (accountId: string, opts: { sender?: string; query?: string }) =>
+  preview: (
+    accountId: string,
+    opts: { sender?: string; query?: string; location?: string },
+  ) =>
     request<{
       message_count: number
       message_ids: string[]
@@ -91,6 +105,7 @@ export const api = {
         account_id: accountId,
         sender: opts.sender || null,
         query: opts.query || null,
+        location: opts.location || null,
       }),
     }),
   cleanup: (payload: {

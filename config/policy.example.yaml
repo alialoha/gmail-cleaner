@@ -1,5 +1,6 @@
-# Optional cleanup suggestions. Copy to ~/.gmail-cleaner/policy.yaml
-# Policies never auto-delete; they only shape scan suggestions.
+# Optional custom storage queries for mode=storage & location=all.
+# Copy to ~/.gmail-cleaner/policy.yaml if you want to override defaults.
+# Subscriptions mode and tab-scoped scans ignore this file and use built-in profiles.
 
 version: 1
 
@@ -23,5 +24,4 @@ queries:
     q: "in:trash"
     enabled: true
 
-# When presenting sender rankings, ignore these (optional)
 ignore_senders: []

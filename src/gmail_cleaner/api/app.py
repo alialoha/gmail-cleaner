@@ -16,12 +16,15 @@ from gmail_cleaner.auth.oauth import get_gmail_service
 from gmail_cleaner.gmail.client import GmailClient
 from gmail_cleaner.history.db import HistoryStore
 from gmail_cleaner.paths import ensure_layout
+from gmail_cleaner.policy.models import LOCATION_LABELS, LOCATIONS, MODES, location_filter_query
 from gmail_cleaner.report.builder import save_report
 from gmail_cleaner.scan.scanner import run_scan
 
 
 class ScanRequest(BaseModel):
     account_id: str
+    mode: str = "storage"
+    location: str = "all"
     max_per_query: int | None = None
     background: bool = True
 
@@ -30,6 +33,7 @@ class PreviewRequest(BaseModel):
     account_id: str
     sender: str | None = None
     query: str | None = None
+    location: str | None = None
 
 
 class CleanupRequest(BaseModel):
@@ -53,11 +57,16 @@ def _resolve_message_ids(
     message_ids: list[str],
     sender: str | None,
     query: str | None,
+    location: str | None = None,
 ) -> list[str]:
     ids = list(message_ids)
     q = query
     if sender and not q:
         q = f"from:{sender}"
+        if location in LOCATIONS:
+            fragment = location_filter_query(location)  # type: ignore[arg-type]
+            if fragment:
+                q = f"({q}) {fragment}"
     if q:
         account = AccountRegistry().get(account_id)
         client = GmailClient(get_gmail_service(account))
@@ -107,6 +116,24 @@ def create_app() -> FastAPI:
         count = client.trash_count()
         return {"account_id": account_id, "count": count}
 
+    @app.get("/api/scan-options")
+    def scan_options() -> dict[str, Any]:
+        return {
+            "modes": [
+                {
+                    "id": "storage",
+                    "label": "Storage (quota / large mail)",
+                },
+                {
+                    "id": "subscriptions",
+                    "label": "Subscriptions (newsletters / ads / marketing)",
+                },
+            ],
+            "locations": [
+                {"id": loc, "label": LOCATION_LABELS[loc]} for loc in LOCATIONS
+            ],
+        }
+
     @app.get("/api/runs")
     def list_runs(limit: int = 50) -> list[dict[str, Any]]:
         return HistoryStore().list_runs(limit=limit)
@@ -120,25 +147,41 @@ def create_app() -> FastAPI:
 
     @app.post("/api/scan")
     def scan(body: ScanRequest) -> dict[str, Any]:
+        if body.mode not in MODES:
+            raise HTTPException(status_code=400, detail=f"mode must be one of {list(MODES)}")
+        if body.location not in LOCATIONS:
+            raise HTTPException(
+                status_code=400, detail=f"location must be one of {list(LOCATIONS)}"
+            )
         try:
             account = AccountRegistry().get(body.account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+        mode = body.mode  # type: ignore[assignment]
+        location = body.location  # type: ignore[assignment]
+
         if not body.background:
-            result = run_scan(account, max_messages_per_query=body.max_per_query)
+            result = run_scan(
+                account,
+                mode=mode,
+                location=location,
+                max_messages_per_query=body.max_per_query,
+            )
             path = save_report(result)
             payload = result.to_dict()
             payload["report_path"] = str(path)
             return payload
 
         history = HistoryStore()
-        run_id = history.start_run(account.id, "scan")
+        run_id = history.start_run(account.id, f"scan:{mode}:{location}")
 
         def _worker() -> None:
             try:
                 result = run_scan(
                     account,
+                    mode=mode,
+                    location=location,
                     history=history,
                     max_messages_per_query=body.max_per_query,
                     run_id=run_id,
@@ -153,12 +196,22 @@ def create_app() -> FastAPI:
                 history.log_event(str(exc), run_id=run_id, level="error")
 
         threading.Thread(target=_worker, daemon=True).start()
-        return {"run_id": run_id, "status": "running", "account_id": account.id}
+        return {
+            "run_id": run_id,
+            "status": "running",
+            "account_id": account.id,
+            "mode": mode,
+            "location": location,
+        }
 
     @app.post("/api/preview")
     def preview(body: PreviewRequest) -> dict[str, Any]:
         if not body.sender and not body.query:
             raise HTTPException(status_code=400, detail="Provide sender and/or query")
+        if body.location is not None and body.location not in LOCATIONS:
+            raise HTTPException(
+                status_code=400, detail=f"location must be one of {list(LOCATIONS)}"
+            )
         try:
             AccountRegistry().get(body.account_id)
         except KeyError as exc:
@@ -168,11 +221,20 @@ def create_app() -> FastAPI:
             message_ids=[],
             sender=body.sender,
             query=body.query,
+            location=body.location,
         )
+        effective = body.query
+        if not effective and body.sender:
+            effective = f"from:{body.sender}"
+            if body.location in LOCATIONS:
+                fragment = location_filter_query(body.location)  # type: ignore[arg-type]
+                if fragment:
+                    effective = f"({effective}) {fragment}"
         return {
             "account_id": body.account_id,
             "sender": body.sender,
-            "query": body.query or (f"from:{body.sender}" if body.sender else None),
+            "query": effective,
+            "location": body.location,
             "message_count": len(ids),
             "message_ids": ids[:50],
             "all_message_ids": ids,

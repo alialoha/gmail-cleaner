@@ -1,17 +1,25 @@
-"""Storage scan: paginate queries, fetch size estimates, rank senders."""
+"""Mailbox scans: storage X-ray or subscriptions/marketing map."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from gmail_cleaner.accounts.registry import Account
 from gmail_cleaner.auth.oauth import get_gmail_service, verify_account_email
 from gmail_cleaner.gmail.client import GmailClient, MessageMeta
 from gmail_cleaner.history.db import HistoryStore
-from gmail_cleaner.policy.models import Policy, load_policy
+from gmail_cleaner.policy.models import (
+    LOCATION_LABELS,
+    ScanLocation,
+    ScanMode,
+    build_scan_queries,
+    load_policy,
+)
+
+SortBy = Literal["size", "count"]
 
 
 @dataclass
@@ -48,12 +56,17 @@ class ScanResult:
     total_messages: int
     total_est_bytes: int
     failed_metadata: int = 0
+    mode: ScanMode = "storage"
+    location: ScanLocation = "all"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
             "account_id": self.account_id,
             "email": self.email,
+            "mode": self.mode,
+            "location": self.location,
+            "location_label": LOCATION_LABELS[self.location],
             "queries": [q.to_dict() for q in self.queries],
             "senders": [s.to_dict() for s in self.senders],
             "total_messages": self.total_messages,
@@ -67,6 +80,9 @@ class ScanResult:
             "run_id": self.run_id,
             "account_id": self.account_id,
             "email": self.email,
+            "mode": self.mode,
+            "location": self.location,
+            "location_label": LOCATION_LABELS[self.location],
             "total_messages": self.total_messages,
             "total_est_bytes": self.total_est_bytes,
             "failed_metadata": self.failed_metadata,
@@ -86,7 +102,7 @@ class ScanResult:
                     "message_count": s.message_count,
                     "est_bytes": s.est_bytes,
                 }
-                for s in self.senders[:25]
+                for s in self.senders[:40]
             ],
         }
 
@@ -96,6 +112,7 @@ def _aggregate_senders(
     *,
     ignore_senders: list[str],
     sample_limit: int = 20,
+    sort_by: SortBy = "size",
 ) -> list[SenderBucket]:
     ignore = {s.lower() for s in ignore_senders}
     counts: dict[str, int] = defaultdict(int)
@@ -120,22 +137,28 @@ def _aggregate_senders(
         )
         for sender in counts
     ]
-    buckets.sort(key=lambda b: b.est_bytes, reverse=True)
+    if sort_by == "count":
+        buckets.sort(key=lambda b: (b.message_count, b.est_bytes), reverse=True)
+    else:
+        buckets.sort(key=lambda b: (b.est_bytes, b.message_count), reverse=True)
     return buckets
 
 
 def run_scan(
     account: Account,
     *,
-    policy: Policy | None = None,
+    mode: ScanMode = "storage",
+    location: ScanLocation = "all",
     history: HistoryStore | None = None,
     max_messages_per_query: int | None = None,
     on_progress: Callable[[str], None] | None = None,
     run_id: str | None = None,
 ) -> ScanResult:
-    policy = policy or load_policy()
     history = history or HistoryStore()
-    run_id = run_id or history.start_run(account.id, "scan")
+    run_id = run_id or history.start_run(account.id, f"scan:{mode}:{location}")
+    custom = load_policy()
+    queries = build_scan_queries(mode, location, custom_policy=custom)
+    sort_by: SortBy = "count" if mode == "subscriptions" else "size"
 
     def progress(msg: str) -> None:
         if on_progress:
@@ -147,12 +170,13 @@ def run_scan(
         client = GmailClient(service)
         email = verify_account_email(account, service)
         progress(f"Authenticated as {email}")
+        progress(f"Mode={mode} · Location={location} ({LOCATION_LABELS[location]})")
 
         all_metas: dict[str, MessageMeta] = {}
         query_buckets: list[QueryBucket] = []
         total_failed = 0
 
-        for pq in policy.enabled_queries():
+        for pq in queries:
             progress(f"Listing: {pq.name} ({pq.q})")
             ids = client.list_message_ids(pq.q, max_results=max_messages_per_query)
             progress(f"Found {len(ids)} message ids for {pq.name}")
@@ -203,9 +227,10 @@ def run_scan(
 
         senders = _aggregate_senders(
             list(all_metas.values()),
-            ignore_senders=policy.ignore_senders,
+            ignore_senders=custom.ignore_senders,
+            sort_by=sort_by,
         )
-        for sender in senders[:100]:
+        for sender in senders[:150]:
             history.add_finding(
                 run_id,
                 bucket="sender",
@@ -225,12 +250,18 @@ def run_scan(
             total_messages=len(all_metas),
             total_est_bytes=sum(m.size_estimate for m in all_metas.values()),
             failed_metadata=total_failed,
+            mode=mode,
+            location=location,
         )
         history.finish_run(run_id, status="completed", summary=result.summary_dict())
         if total_failed:
             progress(f"Scan completed with {total_failed} metadata failures")
         return result
     except Exception as exc:
-        history.finish_run(run_id, status="failed", summary={"error": str(exc)})
+        history.finish_run(
+            run_id,
+            status="failed",
+            summary={"error": str(exc), "mode": mode, "location": location},
+        )
         history.log_event(str(exc), run_id=run_id, level="error")
         raise
