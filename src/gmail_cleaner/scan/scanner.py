@@ -131,10 +131,11 @@ def run_scan(
     history: HistoryStore | None = None,
     max_messages_per_query: int | None = None,
     on_progress: Callable[[str], None] | None = None,
+    run_id: str | None = None,
 ) -> ScanResult:
     policy = policy or load_policy()
     history = history or HistoryStore()
-    run_id = history.start_run(account.id, "scan")
+    run_id = run_id or history.start_run(account.id, "scan")
 
     def progress(msg: str) -> None:
         if on_progress:

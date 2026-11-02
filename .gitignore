@@ -41,9 +41,11 @@ htmlcov/
 
 # Node / dashboard (Phase 2)
 node_modules/
+dashboard/node_modules/
 dashboard/dist/
 dashboard/.env
 dashboard/.env.local
+dashboard/tsconfig.tsbuildinfo
 
 # IDE / OS
 .idea/

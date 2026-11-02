@@ -1,7 +1,8 @@
-"""FastAPI surface shared by CLI `serve` and the future React SPA."""
+"""FastAPI surface shared by CLI `serve` and the React SPA."""
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -11,6 +12,8 @@ from pydantic import BaseModel, Field
 from gmail_cleaner import __version__ as APP_VERSION
 from gmail_cleaner.accounts.registry import AccountRegistry
 from gmail_cleaner.actions.cleanup import apply_cleanup, empty_account_trash
+from gmail_cleaner.auth.oauth import get_gmail_service
+from gmail_cleaner.gmail.client import GmailClient
 from gmail_cleaner.history.db import HistoryStore
 from gmail_cleaner.paths import ensure_layout
 from gmail_cleaner.report.builder import save_report
@@ -20,11 +23,20 @@ from gmail_cleaner.scan.scanner import run_scan
 class ScanRequest(BaseModel):
     account_id: str
     max_per_query: int | None = None
+    background: bool = True
+
+
+class PreviewRequest(BaseModel):
+    account_id: str
+    sender: str | None = None
+    query: str | None = None
 
 
 class CleanupRequest(BaseModel):
     account_id: str
     message_ids: list[str] = Field(default_factory=list)
+    sender: str | None = None
+    query: str | None = None
     confirm: bool = False
     permanent: bool = False
     i_understand_permanent: bool = False
@@ -33,6 +45,24 @@ class CleanupRequest(BaseModel):
 class EmptyTrashRequest(BaseModel):
     account_id: str
     confirm: bool = False
+
+
+def _resolve_message_ids(
+    account_id: str,
+    *,
+    message_ids: list[str],
+    sender: str | None,
+    query: str | None,
+) -> list[str]:
+    ids = list(message_ids)
+    q = query
+    if sender and not q:
+        q = f"from:{sender}"
+    if q:
+        account = AccountRegistry().get(account_id)
+        client = GmailClient(get_gmail_service(account))
+        ids.extend(client.list_message_ids(q))
+    return list(dict.fromkeys(ids))
 
 
 def create_app() -> FastAPI:
@@ -67,6 +97,16 @@ def create_app() -> FastAPI:
             for a in AccountRegistry().load()
         ]
 
+    @app.get("/api/accounts/{account_id}/trash-count")
+    def trash_count(account_id: str) -> dict[str, Any]:
+        try:
+            account = AccountRegistry().get(account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        client = GmailClient(get_gmail_service(account))
+        count = client.trash_count()
+        return {"account_id": account_id, "count": count}
+
     @app.get("/api/runs")
     def list_runs(limit: int = 50) -> list[dict[str, Any]]:
         return HistoryStore().list_runs(limit=limit)
@@ -84,11 +124,59 @@ def create_app() -> FastAPI:
             account = AccountRegistry().get(body.account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        result = run_scan(account, max_messages_per_query=body.max_per_query)
-        path = save_report(result)
-        payload = result.to_dict()
-        payload["report_path"] = str(path)
-        return payload
+
+        if not body.background:
+            result = run_scan(account, max_messages_per_query=body.max_per_query)
+            path = save_report(result)
+            payload = result.to_dict()
+            payload["report_path"] = str(path)
+            return payload
+
+        history = HistoryStore()
+        run_id = history.start_run(account.id, "scan")
+
+        def _worker() -> None:
+            try:
+                result = run_scan(
+                    account,
+                    history=history,
+                    max_messages_per_query=body.max_per_query,
+                    run_id=run_id,
+                )
+                save_report(result)
+            except Exception as exc:  # noqa: BLE001 - persist failure into history
+                current = history.get_run(run_id)
+                if current and current.get("status") == "running":
+                    history.finish_run(
+                        run_id, status="failed", summary={"error": str(exc)}
+                    )
+                history.log_event(str(exc), run_id=run_id, level="error")
+
+        threading.Thread(target=_worker, daemon=True).start()
+        return {"run_id": run_id, "status": "running", "account_id": account.id}
+
+    @app.post("/api/preview")
+    def preview(body: PreviewRequest) -> dict[str, Any]:
+        if not body.sender and not body.query:
+            raise HTTPException(status_code=400, detail="Provide sender and/or query")
+        try:
+            AccountRegistry().get(body.account_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        ids = _resolve_message_ids(
+            body.account_id,
+            message_ids=[],
+            sender=body.sender,
+            query=body.query,
+        )
+        return {
+            "account_id": body.account_id,
+            "sender": body.sender,
+            "query": body.query or (f"from:{body.sender}" if body.sender else None),
+            "message_count": len(ids),
+            "message_ids": ids[:50],
+            "all_message_ids": ids,
+        }
 
     @app.post("/api/cleanup")
     def cleanup(body: CleanupRequest) -> dict[str, Any]:
@@ -106,10 +194,17 @@ def create_app() -> FastAPI:
             account = AccountRegistry().get(body.account_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
         try:
+            ids = _resolve_message_ids(
+                body.account_id,
+                message_ids=body.message_ids,
+                sender=body.sender,
+                query=body.query,
+            )
             result = apply_cleanup(
                 account,
-                body.message_ids,
+                ids,
                 confirm=True,
                 permanent=body.permanent,
             )

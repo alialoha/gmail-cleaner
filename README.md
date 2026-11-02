@@ -103,19 +103,33 @@ gmail-cleaner empty-trash --account personal          # shows count
 gmail-cleaner empty-trash --account personal --confirm
 ```
 
-### 6. Local API (dashboard later)
+### 6. Local API + dashboard (Phase 2)
+
+Terminal 1 — API:
 
 ```bash
 gmail-cleaner serve --host 127.0.0.1 --port 8787
 ```
 
+Terminal 2 — UI:
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+Open http://127.0.0.1:5173
+
 Loopback only by default. Non-local binds require `--allow-remote` (the API has **no authentication** yet).
 
 - `GET /api/health`
 - `GET /api/accounts`
+- `GET /api/accounts/{id}/trash-count`
 - `GET /api/runs`
 - `GET /api/runs/{id}`
-- `POST /api/scan`
+- `POST /api/scan` (background by default; poll run status)
+- `POST /api/preview`
 - `POST /api/cleanup` (requires `confirm: true`; permanent also needs `i_understand_permanent`)
 - `POST /api/empty-trash`
 
